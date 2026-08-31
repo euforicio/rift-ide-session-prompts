@@ -31,7 +31,7 @@ import type { LoggedPrompt, rpcContract } from "./server";
 
 /** Lines a collapsed row shows before the expand toggle appears. */
 const CLAMP_LINES = 3;
-/** How often relative timestamps are recomputed. */
+/** How often timestamps are recomputed and the backstop refetch runs. */
 const TICK_MS = 30_000;
 
 const SECONDS_PER_MINUTE = 60;
@@ -237,7 +237,7 @@ function PromptsPanel() {
   }, []);
 
   // Fetch on mount, on thread change, and whenever something asks for a
-  // refresh (a realtime signal, a reconnect, or the Retry/Refresh buttons).
+  // refresh (a realtime signal, a reconnect, the backstop tick, or Retry).
   useEffect(() => {
     if (threadId === null) return;
     let isCancelled = false;
@@ -262,11 +262,22 @@ function PromptsPanel() {
     };
   }, [threadId, reloadToken]);
 
-  // Keep relative timestamps honest without re-fetching anything.
+  // One timer, two jobs: keep the relative timestamps honest, and act as a
+  // slow backstop refetch.
+  //
+  // The backstop is what makes the list trustworthy without a manual Refresh
+  // control. The event-driven path covers submitting to an idle thread
+  // (thread.active) and the end of a turn (thread.idle), but a prompt queued
+  // or STEERED INTO AN ALREADY-RUNNING TURN produces no new active
+  // transition — so without this it would stay invisible for the length of
+  // that turn, which is exactly when this panel is most useful.
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), TICK_MS);
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      refresh();
+    }, TICK_MS);
     return () => clearInterval(timer);
-  }, []);
+  }, [refresh]);
 
   // Live updates: the server publishes on every thread.active / thread.idle.
   useRealtime(
@@ -387,23 +398,13 @@ function PromptsPanel() {
           aria-label="Filter prompts"
           className="h-8 text-sm"
         />
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <span className="text-xs text-muted-foreground">
-            {state.kind === "ready"
-              ? isFiltering
-                ? `${rows.length} of ${allPrompts.length}`
-                : `${allPrompts.length} ${allPrompts.length === 1 ? "prompt" : "prompts"}`
-              : " "}
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-1.5 text-xs text-muted-foreground"
-            onClick={refresh}
-          >
-            Refresh
-          </Button>
-        </div>
+        {state.kind === "ready" && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            {isFiltering
+              ? `${rows.length} of ${allPrompts.length}`
+              : `${allPrompts.length} ${allPrompts.length === 1 ? "prompt" : "prompts"}`}
+          </p>
+        )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">{renderBody()}</div>
     </div>

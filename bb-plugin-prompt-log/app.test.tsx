@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { fireEvent, waitFor } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, waitFor } from "@testing-library/react";
 import {
   loadPluginApp,
   renderSlot,
@@ -216,6 +216,32 @@ describe("live updates", () => {
     await slot.behavior.emitRealtime(PROMPTS_CHANGED_CHANNEL, "not-an-object");
     await slot.behavior.emitRealtime(PROMPTS_CHANGED_CHANNEL, { threadId: 42 });
     expect(slot.inspection.rpcCalls).toHaveLength(1);
+  });
+
+  it("backstops with a slow refetch, covering a prompt steered into a running turn", async () => {
+    // No lifecycle event fires when a prompt is queued into an already-active
+    // thread, so the timer is the only thing that surfaces it before the turn
+    // ends. This is why the panel ships no manual Refresh control.
+    vi.useFakeTimers();
+    try {
+      const slot = mountPanel(withPrompts([]));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(slot.inspection.rpcCalls).toHaveLength(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(slot.inspection.rpcCalls).toHaveLength(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(slot.inspection.rpcCalls).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refetches on reconnect, because signals sent while offline are never replayed", async () => {

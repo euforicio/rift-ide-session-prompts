@@ -17,7 +17,8 @@ prompts — as a compact, scannable list.
   exact time in each row's tooltip.
 - **3-line clamp** with a More/Less toggle, shown only on rows whose text is
   actually truncated at the panel's current width.
-- **Live updates.** A new prompt appears at the top without reopening the panel.
+- **Live updates.** A new prompt appears at the top without reopening the panel;
+  no manual refresh control is needed (see "Refreshing").
 - **To composer.** Each row puts its text back in the composer so you can re-run
   or amend an earlier request.
 - **Filter box** — case-insensitive substring match.
@@ -47,8 +48,8 @@ For live updates the server publishes a bare invalidation on the
   submitting a prompt to an idle thread does. This is the normal path.
 - `thread.idle` — the end of a turn, which catches prompts **queued or steered
   into an already-running turn**. Those add history rows without producing a new
-  `active` transition, so without this they would not appear until the next
-  refresh.
+  `active` transition, so without this they would not appear until the 30s
+  backstop tick described under "Refreshing".
 
 The panel also refetches on each *re*-connection
 (`useRealtimeConnectionState()`), because realtime signals are ephemeral and are
@@ -91,9 +92,26 @@ npm run build     # bb plugin build
 `vitest.config.ts` restates the `@/*` alias because vitest runs on vite, which
 does not read it from `tsconfig.json` the way `bb plugin build` does.
 
-## Known limitation
+## Refreshing
 
-A prompt sent while a turn is already running appears when that turn ends
-(via `thread.idle`), not the instant you submit it — bb fires no lifecycle event
-for a thread that is already `active`. The Refresh button forces an immediate
-reload.
+There is deliberately **no manual Refresh control**. A live panel that ships one
+implies its own list cannot be trusted, and in a ~420px column that button costs
+permanent space for an occasional case. Four things keep the list current
+instead:
+
+| Trigger | Covers |
+| --- | --- |
+| Panel mount | Opening the tab |
+| `thread.active` signal | Submitting a prompt to an idle thread (instant) |
+| `thread.idle` signal | End of a turn |
+| 30s backstop tick | Everything else, including a missed signal |
+
+The backstop exists for one real gap: a prompt **queued or steered into an
+already-running turn** causes no new `active` transition, because the thread was
+already active. Event-driven refresh alone would leave it invisible for the whole
+turn — precisely when this panel is most useful. The tick that keeps relative
+timestamps honest doubles as that refetch, so it costs no extra timer, and the
+worst-case delay is 30 seconds rather than the length of a turn.
+
+The error state keeps its own **Retry** button. That one is load-bearing: nothing
+else recovers a failed initial load.
