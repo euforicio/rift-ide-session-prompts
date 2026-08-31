@@ -181,7 +181,10 @@ describe("copy to composer", () => {
     await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(1));
     expect(slot.inspection.composer.text).toBe("");
 
-    fireEvent.click(slot.getByText("To composer"));
+    // Icon-only now, so query by accessible name rather than visible text.
+    fireEvent.click(
+      slot.getByRole("button", { name: "Put this prompt in the composer" }),
+    );
 
     await waitFor(() =>
       expect(slot.inspection.composer.text).toBe("re-run this please"),

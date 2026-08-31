@@ -29,6 +29,9 @@ import { Input } from "@/components/ui/input";
 import { PROMPTS_CHANGED_CHANNEL } from "./shared.js";
 import type { LoggedPrompt, rpcContract } from "./server";
 
+/** Accessible name + tooltip for the per-row composer action. */
+const COMPOSER_ACTION_LABEL = "Put this prompt in the composer";
+
 /** Lines a collapsed row shows before the expand toggle appears. */
 const CLAMP_LINES = 3;
 /** How often timestamps are recomputed and the backstop refetch runs. */
@@ -90,6 +93,28 @@ const expandedStyle: CSSProperties = {
   whiteSpace: "pre-wrap",
   overflowWrap: "anywhere",
 };
+
+/**
+ * "Insert into input" arrow, inline so the plugin needs no icon dependency.
+ * Stroke-based and using currentColor, so it follows the host theme; the
+ * Button's `[&_svg]:size-4` rule sizes it.
+ */
+function ComposerArrowIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="9 10 4 15 9 20" />
+      <path d="M20 4v7a4 4 0 0 1-4 4H4" />
+    </svg>
+  );
+}
 
 type LoadState =
   | { kind: "loading" }
@@ -179,15 +204,23 @@ function PromptRow({
               {isExpanded ? "Less" : "More"}
             </Button>
           )}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-1.5 text-xs text-muted-foreground"
-            disabled={!hasText}
-            onClick={() => onSendToComposer(prompt)}
-          >
-            To composer
-          </Button>
+          {/* The label was identical on every row, so it carried no
+              information after the first one and cost ~22% of the row width in
+              a ~420px column. The accessible name lives on aria-label, and the
+              wrapper carries the native tooltip because the vendored Button
+              deliberately omits `title`. */}
+          <span title={COMPOSER_ACTION_LABEL}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0 text-muted-foreground"
+              aria-label={COMPOSER_ACTION_LABEL}
+              disabled={!hasText}
+              onClick={() => onSendToComposer(prompt)}
+            >
+              <ComposerArrowIcon />
+            </Button>
+          </span>
         </div>
       </div>
 
