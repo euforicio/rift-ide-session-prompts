@@ -1,0 +1,99 @@
+# Prompt Log
+
+A [bb](https://get-bb.dev) plugin that lists every prompt you sent in a thread,
+newest first, in a side-panel tab called **Prompts**.
+
+When an agent's replies are long, finding your own messages means scrolling back
+through walls of tool output. This gives you your prompts — and only your
+prompts — as a compact, scannable list.
+
+## What it does
+
+- **Prompts tab** in the thread side panel, next to "Start side chat" and
+  "Start terminal".
+- **Newest first.** Sorted descending on `createdAt` in the frontend, so the
+  order does not depend on the server's default ordering.
+- **Relative timestamps** ("2m ago", "1h ago"), refreshed every 30s, with the
+  exact time in each row's tooltip.
+- **3-line clamp** with a More/Less toggle, shown only on rows whose text is
+  actually truncated at the panel's current width.
+- **Live updates.** A new prompt appears at the top without reopening the panel.
+- **To composer.** Each row puts its text back in the composer so you can re-run
+  or amend an earlier request.
+- **Filter box** — case-insensitive substring match.
+- **Never blank.** Distinct states for loading, empty history, no filter match,
+  no thread, and a load failure (with Retry).
+
+## How it works
+
+`server.ts` exposes one RPC method, `listPrompts`, over
+`bb.sdk.threads.promptHistory({ threadId })` — a source that contains only
+user-submitted prompts, so no assistant output or tool calls need filtering out.
+
+Each history record's `input` is an array of structured parts. The server
+flattens it to a single string plus a count:
+
+- `type: "text"` parts are joined, except those marked
+  `visibility: "agent-only"` — that is context bb injected for the agent
+  (resolved @-mentions and similar), not words you typed.
+- Every other part type is counted, not dropped, so an image-only prompt still
+  renders as a row that says `+1 non-text part` rather than a blank entry. This
+  is also how it degrades on part types a future bb adds.
+
+For live updates the server publishes a bare invalidation on the
+`prompts-changed` channel, and the panel refetches:
+
+- `thread.active` — a thread entering the running state, which is what
+  submitting a prompt to an idle thread does. This is the normal path.
+- `thread.idle` — the end of a turn, which catches prompts **queued or steered
+  into an already-running turn**. Those add history rows without producing a new
+  `active` transition, so without this they would not appear until the next
+  refresh.
+
+The panel also refetches on each *re*-connection
+(`useRealtimeConnectionState()`), because realtime signals are ephemeral and are
+never replayed — anything published while the socket was down is lost.
+
+`shared.ts` holds the channel name. It exists so `app.tsx` never imports a
+*value* from `server.ts`: a type-only import is erased from the frontend bundle,
+but a value import is not, and would pull zod and the `node:` builtins into it.
+
+## Dependencies
+
+Runtime `dependencies` are deliberately just two:
+
+| Package | Why |
+| --- | --- |
+| `zod` | RPC contract schemas. bb does not shim zod. |
+| `@radix-ui/react-slot` | Used by the vendored `components/ui/button`. Not a portal family, so not shimmed. |
+
+Everything bb shims at runtime (react, react-dom, sonner, clsx, tailwind-merge,
+class-variance-authority, the portal radix families) is a **type-only
+`devDependencies`** entry at the host's version — run `bb plugin types` to
+repin them rather than choosing versions by hand. Timestamps are formatted by
+hand; there is no date library.
+
+## Development
+
+```sh
+bb plugin install .    # register this directory in place
+bb plugin dev          # rebuild + hot reload on save
+bb plugin logs prompt-log -f
+bb plugin list
+```
+
+```sh
+npm test          # vitest: backend harness + jsdom panel tests
+npm run typecheck # tsc --noEmit
+npm run build     # bb plugin build
+```
+
+`vitest.config.ts` restates the `@/*` alias because vitest runs on vite, which
+does not read it from `tsconfig.json` the way `bb plugin build` does.
+
+## Known limitation
+
+A prompt sent while a turn is already running appears when that turn ends
+(via `thread.idle`), not the instant you submit it — bb fires no lifecycle event
+for a thread that is already `active`. The Refresh button forces an immediate
+reload.
