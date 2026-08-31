@@ -19,8 +19,8 @@ prompts — as a compact, scannable list.
   actually truncated at the panel's current width.
 - **Live updates.** A new prompt appears at the top without reopening the panel;
   no manual refresh control is needed (see "Refreshing").
-- **To composer.** Each row puts its text back in the composer so you can re-run
-  or amend an earlier request.
+- **Composer button.** Each row puts its text back in the composer so you can
+  re-run or amend an earlier request (see "Composer action").
 - **Filter box** — case-insensitive substring match.
 - **Never blank.** Distinct states for loading, empty history, no filter match,
   no thread, and a load failure (with Retry).
@@ -91,6 +91,28 @@ npm run build     # bb plugin build
 
 `vitest.config.ts` restates the `@/*` alias because vitest runs on vite, which
 does not read it from `tsconfig.json` the way `bb plugin build` does.
+
+## Composer action
+
+Each row's arrow button calls `useComposer().setText(...)`, which **replaces**
+the composer draft rather than appending to it. That is deliberate: the composer
+then contains exactly that prompt, every time, with no dependence on invisible
+state.
+
+It is also safe, and this was **verified in the running app**: BB's composer
+undo (`Cmd+Z`) restores a draft that `setText` replaced. So an in-progress
+message is recoverable.
+
+Do not "fix" this by switching to `addQuote()` (which appends a `> ` blockquote)
+or by conditionally appending only when a draft exists. Both trade a predictable
+single behavior for a safety net the host already provides.
+
+The button is icon-only because the label was identical on every row, carrying no
+information after the first while costing ~22% of the row width in a ~420px
+column. Its accessible name is on `aria-label` and the native tooltip is on a
+wrapper `span`, because the vendored `Button` deliberately omits `title`. The
+glyph is an inline stroke SVG using `currentColor`, so it follows the host theme
+and adds no icon dependency.
 
 ## Refreshing
 
