@@ -1,0 +1,13 @@
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# macOS
+.DS_Store
+
+# Claude Code local state (also covered by the global ignore, repeated here
+# so the repo is self-contained for anyone who clones it)
+.claude/settings.local.json
+.claude/.cc-writes/
