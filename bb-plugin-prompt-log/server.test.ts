@@ -6,6 +6,11 @@ import {
 import plugin from "./server";
 import { PROMPTS_CHANGED_CHANNEL } from "./shared.js";
 
+/** The thread-status union, taken from the SDK's own fixture signature. */
+type ThreadStatus = NonNullable<
+  NonNullable<Parameters<typeof makeThreadResponse>[0]>["status"]
+>;
+
 /** Build a prompt-history record the way the SDK returns one. */
 function record(
   id: string,
@@ -15,12 +20,16 @@ function record(
   return { id, createdAt, input };
 }
 
-function hostWithHistory(records: ReturnType<typeof record>[]) {
+function hostWithHistory(
+  records: ReturnType<typeof record>[],
+  status: ThreadStatus = "idle",
+) {
   return createFakePluginHost({
     pluginId: "prompt-log",
     sdk: {
       threads: {
         promptHistory: async () => records,
+        get: async () => makeThreadResponse({ id: "thr_1", status }),
       },
     },
   });
@@ -41,6 +50,7 @@ describe("listPrompts", () => {
     });
 
     expect(result).toEqual({
+      isRunning: false,
       prompts: [
         {
           id: "phist_a",
@@ -144,5 +154,44 @@ describe("live updates", () => {
     expect(harness.realtimeSignals[0]!.payload).toEqual({
       threadId: "thr_other",
     });
+  });
+});
+
+describe("isRunning", () => {
+  async function isRunningFor(status: ThreadStatus): Promise<boolean> {
+    const { bb, harness } = hostWithHistory([], status);
+    await plugin(bb);
+    const result = (await harness.behavior.callRpc("listPrompts", {
+      threadId: "thr_1",
+    })) as { isRunning: boolean };
+    return result.isRunning;
+  }
+
+  it("is true while the agent is working", async () => {
+    expect(await isRunningFor("active")).toBe(true);
+    // A session spinning up is already working from the user's point of view.
+    expect(await isRunningFor("starting")).toBe(true);
+  });
+
+  it("is false once the thread is not working", async () => {
+    expect(await isRunningFor("idle")).toBe(false);
+    expect(await isRunningFor("stopping")).toBe(false);
+    expect(await isRunningFor("error")).toBe(false);
+  });
+});
+
+describe("thread.failed", () => {
+  it("publishes too, so a failed turn clears the working marker", async () => {
+    const { bb, harness } = hostWithHistory([]);
+    await plugin(bb);
+
+    await harness.behavior.emitThreadEvent("thread.failed", {
+      thread: makeThreadResponse({ id: "thr_9" }),
+      error: "boom",
+    });
+
+    expect(harness.realtimeSignals).toEqual([
+      { channel: PROMPTS_CHANGED_CHANNEL, payload: { threadId: "thr_9" } },
+    ]);
   });
 });

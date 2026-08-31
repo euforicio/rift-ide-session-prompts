@@ -13,15 +13,23 @@ prompts — as a compact, scannable list.
   "Start terminal".
 - **Newest first.** Sorted descending on `createdAt` in the frontend, so the
   order does not depend on the server's default ordering.
+- **Day groups.** Rows sit under sticky `Today` / `Yesterday` / `Aug 28`
+  headings, so scrolling a long thread walks through sessions rather than an
+  undifferentiated stream.
 - **Relative timestamps** ("2m ago", "1h ago"), refreshed every 30s, with the
-  exact time in each row's tooltip.
+  exact time in each row's tooltip, in a machine-readable `<time>` element.
+- **Working marker.** While the thread is running, the prompt being worked on
+  carries a pulsing "working" dot, so the panel shows what the agent is doing
+  right now.
 - **3-line clamp** with a More/Less toggle, shown only on rows whose text is
   actually truncated at the panel's current width.
 - **Live updates.** A new prompt appears at the top without reopening the panel;
   no manual refresh control is needed (see "Refreshing").
 - **Composer button.** Each row puts its text back in the composer so you can
   re-run or amend an earlier request (see "Composer action").
-- **Filter box** — case-insensitive substring match.
+- **Filter box** — case-insensitive substring match, with matches highlighted in
+  the row text and an `×` to clear it. Highlighting matters because rows are
+  clamped: a row can match on text that is not currently visible.
 - **Never blank.** Distinct states for loading, empty history, no filter match,
   no thread, and a load failure (with Retry).
 
@@ -50,6 +58,9 @@ For live updates the server publishes a bare invalidation on the
   into an already-running turn**. Those add history rows without producing a new
   `active` transition, so without this they would not appear until the 30s
   backstop tick described under "Refreshing".
+- `thread.failed` — a turn ending in failure, which produces no `idle`
+  transition. Without it the panel would keep showing the "working" marker on a
+  thread that had already stopped.
 
 The panel also refetches on each *re*-connection
 (`useRealtimeConnectionState()`), because realtime signals are ephemeral and are
@@ -91,6 +102,20 @@ npm run build     # bb plugin build
 
 `vitest.config.ts` restates the `@/*` alias because vitest runs on vite, which
 does not read it from `tsconfig.json` the way `bb plugin build` does.
+
+## The working marker
+
+`listPrompts` also returns `isRunning`, derived server-side from
+`bb.sdk.threads.get(...).status` — true for `active` and `starting` (a session
+spinning up is already working from the user's point of view), false for `idle`,
+`stopping` and `error`. It is a **boolean, not the raw status enum**: the panel
+does not need BB's status vocabulary, and a new status value therefore cannot
+break the frontend.
+
+The marker is keyed to the newest prompt's **identity**, computed from the
+unfiltered list — not to "whatever row is on top". A filter can put a much older
+prompt first, and labelling that one as in-flight would be actively misleading.
+There is a test for exactly that case.
 
 ## Composer action
 

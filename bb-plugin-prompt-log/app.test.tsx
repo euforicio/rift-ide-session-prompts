@@ -24,6 +24,18 @@ function row(id: string, minutesAgo: number, text: string): Row {
   return { id, createdAt: BASE - minutesAgo * 60_000, text, extraPartCount: 0 };
 }
 
+/** Anchored to the real clock, because day grouping is relative to today. */
+function recentRow(id: string, minutesAgo: number, text: string): Row {
+  return {
+    id,
+    createdAt: Date.now() - minutesAgo * 60_000,
+    text,
+    extraPartCount: 0,
+  };
+}
+
+const MINUTES_PER_DAY = 60 * 24;
+
 let app: CapturedPluginApp;
 
 beforeAll(async () => {
@@ -52,9 +64,9 @@ function mountPanel(
 }
 
 /** Options with the common case filled in: this thread, one canned response. */
-function withPrompts(prompts: Row[]): RenderSlotOptions {
+function withPrompts(prompts: Row[], isRunning = false): RenderSlotOptions {
   return {
-    rpc: { listPrompts: () => ({ prompts }) },
+    rpc: { listPrompts: () => ({ prompts, isRunning }) },
     context: { threadId: THREAD, projectId: null },
   };
 }
@@ -157,7 +169,7 @@ describe("empty and error states", () => {
         listPrompts: () => {
           attempts += 1;
           if (attempts === 1) throw new Error("Thread not found");
-          return { prompts: [row("a", 3, "recovered")] };
+          return { prompts: [row("a", 3, "recovered")], isRunning: false };
         },
       },
       context: { threadId: THREAD, projectId: null },
@@ -313,5 +325,162 @@ describe("expand and collapse", () => {
 
     await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(1));
     expect(slot.queryByText("More")).toBeNull();
+  });
+});
+
+describe("day grouping", () => {
+  function headings(container: HTMLElement): string[] {
+    return Array.from(container.querySelectorAll("h3")).map((node) =>
+      (node.textContent ?? "").trim(),
+    );
+  }
+
+  it("labels today and yesterday, and orders groups newest day first", async () => {
+    const slot = mountPanel(
+      withPrompts([
+        recentRow("t", 5, "TODAY PROMPT"),
+        recentRow("y", MINUTES_PER_DAY, "YESTERDAY PROMPT"),
+        recentRow("o", MINUTES_PER_DAY * 3, "OLDER PROMPT"),
+      ]),
+    );
+
+    await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(3));
+
+    const labels = headings(slot.container);
+    expect(labels).toHaveLength(3);
+    expect(labels[0]).toBe("Today");
+    expect(labels[1]).toBe("Yesterday");
+    // Three days back is a calendar date, not a relative word.
+    expect(labels[2]).not.toBe("Today");
+    expect(labels[2]).not.toBe("Yesterday");
+
+    // Grouping must not disturb the strict newest-first row order.
+    const rows = renderedRows(slot.container);
+    expect(rows[0]).toContain("TODAY PROMPT");
+    expect(rows[1]).toContain("YESTERDAY PROMPT");
+    expect(rows[2]).toContain("OLDER PROMPT");
+  });
+
+  it("puts same-day prompts under a single heading", async () => {
+    const slot = mountPanel(
+      withPrompts([recentRow("a", 5, "one"), recentRow("b", 30, "two")]),
+    );
+
+    await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(2));
+    expect(headings(slot.container)).toEqual(["Today"]);
+  });
+});
+
+describe("filter match highlighting", () => {
+  function marks(container: HTMLElement): string[] {
+    return Array.from(container.querySelectorAll("mark")).map((node) =>
+      node.textContent ?? "",
+    );
+  }
+
+  it("marks matches while preserving the original casing", async () => {
+    const slot = mountPanel(withPrompts([row("a", 1, "Add a GITIGNORE file")]));
+    await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(1));
+    expect(marks(slot.container)).toHaveLength(0);
+
+    fireEvent.change(slot.getByLabelText("Filter prompts"), {
+      target: { value: "gitignore" },
+    });
+
+    await waitFor(() => expect(marks(slot.container)).toHaveLength(1));
+    // Lowercase query, uppercase source: the row must render its own text.
+    expect(marks(slot.container)[0]).toBe("GITIGNORE");
+  });
+
+  it("marks every occurrence, not just the first", async () => {
+    const slot = mountPanel(withPrompts([row("a", 1, "log the log of the log")]));
+    await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(1));
+
+    fireEvent.change(slot.getByLabelText("Filter prompts"), {
+      target: { value: "log" },
+    });
+
+    await waitFor(() => expect(marks(slot.container)).toHaveLength(3));
+  });
+});
+
+describe("filter clear control", () => {
+  it("appears only while filtering, and clears the filter", async () => {
+    const slot = mountPanel(
+      withPrompts([row("a", 1, "alpha"), row("b", 2, "beta")]),
+    );
+    await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(2));
+    expect(slot.queryByRole("button", { name: "Clear filter" })).toBeNull();
+
+    fireEvent.change(slot.getByLabelText("Filter prompts"), {
+      target: { value: "alpha" },
+    });
+    await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(1));
+
+    fireEvent.click(slot.getByRole("button", { name: "Clear filter" }));
+
+    await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(2));
+    expect(slot.queryByRole("button", { name: "Clear filter" })).toBeNull();
+  });
+});
+
+describe("timestamp semantics", () => {
+  it("renders a machine-readable <time> element", async () => {
+    const prompt = row("a", 5, "hello");
+    const slot = mountPanel(withPrompts([prompt]));
+    await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(1));
+
+    const time = slot.container.querySelector("time");
+    expect(time).not.toBeNull();
+    expect(time!.getAttribute("datetime")).toBe(
+      new Date(prompt.createdAt).toISOString(),
+    );
+  });
+});
+
+describe("running indicator", () => {
+  function indicators(container: HTMLElement): HTMLElement[] {
+    return Array.from(container.querySelectorAll('[role="status"]'));
+  }
+
+  it("marks the newest prompt while the thread is working", async () => {
+    const slot = mountPanel(
+      withPrompts([row("new", 1, "NEWEST"), row("old", 60, "OLDER")], true),
+    );
+
+    await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(2));
+    await waitFor(() => expect(indicators(slot.container)).toHaveLength(1));
+
+    // Exactly one marker, and it belongs to the first (newest) row.
+    const rows = Array.from(slot.container.querySelectorAll("li"));
+    expect(rows[0]!.querySelector('[role="status"]')).not.toBeNull();
+    expect(rows[1]!.querySelector('[role="status"]')).toBeNull();
+    expect(rows[0]!.textContent).toContain("working");
+  });
+
+  it("shows no marker when the thread is idle", async () => {
+    const slot = mountPanel(
+      withPrompts([row("new", 1, "NEWEST"), row("old", 60, "OLDER")], false),
+    );
+
+    await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(2));
+    expect(indicators(slot.container)).toHaveLength(0);
+  });
+
+  it("does not mark a row merely because a filter put it on top", async () => {
+    // "OLDER" is the only match, so it becomes the first rendered row — but it
+    // is not the prompt being worked on, so it must not be marked.
+    const slot = mountPanel(
+      withPrompts([row("new", 1, "NEWEST"), row("old", 60, "OLDER")], true),
+    );
+    await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(2));
+
+    fireEvent.change(slot.getByLabelText("Filter prompts"), {
+      target: { value: "older" },
+    });
+
+    await waitFor(() => expect(renderedRows(slot.container)).toHaveLength(1));
+    expect(renderedRows(slot.container)[0]).toContain("OLDER");
+    expect(indicators(slot.container)).toHaveLength(0);
   });
 });

@@ -1,7 +1,7 @@
 // bb-plugin-prompt-log — frontend entry.
 //
 // Registers one surface: a "Prompts" tab in the thread side panel listing every
-// prompt sent in the current thread, newest first.
+// prompt sent in the current thread, newest first, grouped by day.
 //
 // Only the CONTRACT TYPE is imported from ./server, so the backend module (and
 // zod, and the node: builtins) stay out of this bundle. The realtime channel
@@ -70,6 +70,67 @@ function formatAbsoluteTime(createdAt: number): string {
 }
 
 /**
+ * LOCAL calendar-day identity, so grouping matches the day the user would read
+ * off a clock rather than a UTC boundary.
+ */
+function dayKey(ms: number): string {
+  const date = new Date(ms);
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+/**
+ * Group heading. "Today"/"Yesterday" carry more meaning than a date, and the
+ * year is only shown when it differs from the current one. Uses the platform's
+ * own locale formatting rather than a date library.
+ */
+function formatDayLabel(ms: number, now: number): string {
+  if (dayKey(ms) === dayKey(now)) return "Today";
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (dayKey(ms) === dayKey(yesterday.getTime())) return "Yesterday";
+
+  const date = new Date(ms);
+  const isCurrentYear = date.getFullYear() === new Date(now).getFullYear();
+  return date.toLocaleDateString(
+    undefined,
+    isCurrentYear
+      ? { month: "short", day: "numeric" }
+      : { year: "numeric", month: "short", day: "numeric" },
+  );
+}
+
+interface PromptGroup {
+  key: string;
+  label: string;
+  prompts: LoggedPrompt[];
+}
+
+/**
+ * Split an ALREADY newest-first list into consecutive day runs. Because the
+ * input is sorted, a single pass preserves both the group order and the order
+ * within each group — no re-sorting, and no chance of the grouping silently
+ * reordering the list.
+ */
+function groupByDay(prompts: LoggedPrompt[], now: number): PromptGroup[] {
+  const groups: PromptGroup[] = [];
+  for (const prompt of prompts) {
+    const key = dayKey(prompt.createdAt);
+    const current = groups[groups.length - 1];
+    if (current !== undefined && current.key === key) {
+      current.prompts.push(prompt);
+      continue;
+    }
+    groups.push({
+      key,
+      label: formatDayLabel(prompt.createdAt, now),
+      prompts: [prompt],
+    });
+  }
+  return groups;
+}
+
+/**
  * Read the thread id out of an untrusted realtime payload. Signals arrive as
  * `unknown`, and this plugin's own channel is the only one delivered here, but
  * the shape is still checked rather than asserted.
@@ -116,9 +177,91 @@ function ComposerArrowIcon() {
   );
 }
 
+/** Dismiss glyph for the filter's clear control. */
+function ClearIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="size-3.5"
+      aria-hidden="true"
+    >
+      <path d="M18 6 6 18" />
+      <path d="m6 6 12 12" />
+    </svg>
+  );
+}
+
+/**
+ * Render `text` with every case-insensitive occurrence of `query` marked.
+ *
+ * This matters because rows are clamped to three lines: a row can match on text
+ * that is not even visible, so without marking it there is no way to see WHY it
+ * survived the filter.
+ *
+ * The highlight uses `bg-foreground/20` rather than `<mark>`'s default yellow,
+ * which would ignore the host theme and go unreadable in dark mode.
+ */
+function HighlightedText({ text, query }: { text: string; query: string }) {
+  if (query === "") return <>{text}</>;
+
+  const haystack = text.toLowerCase();
+  const needle = query.toLowerCase();
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  let matchIndex = 0;
+
+  for (;;) {
+    const found = haystack.indexOf(needle, cursor);
+    if (found === -1) {
+      parts.push(text.slice(cursor));
+      break;
+    }
+    if (found > cursor) parts.push(text.slice(cursor, found));
+    parts.push(
+      <mark
+        key={`m${matchIndex++}`}
+        className="rounded bg-foreground/20 text-foreground"
+      >
+        {text.slice(found, found + needle.length)}
+      </mark>,
+    );
+    cursor = found + needle.length;
+  }
+
+  return <>{parts}</>;
+}
+
+/**
+ * "The agent is working on this right now" marker.
+ *
+ * A pulsing ring rather than a spinner: it sits inline beside a timestamp in a
+ * narrow column, so it must not reserve spinner-sized space or draw the eye
+ * away from the prompt text. `role="status"` gives assistive tech the same
+ * information the dot conveys visually.
+ */
+function RunningIndicator() {
+  return (
+    <span
+      role="status"
+      className="flex shrink-0 items-center gap-1.5 text-xs text-foreground"
+    >
+      <span className="relative flex size-1.5">
+        <span className="absolute inline-flex size-full animate-ping rounded-full bg-foreground opacity-60" />
+        <span className="relative inline-flex size-1.5 rounded-full bg-foreground" />
+      </span>
+      working
+    </span>
+  );
+}
+
 type LoadState =
   | { kind: "loading" }
-  | { kind: "ready"; prompts: LoggedPrompt[] }
+  | { kind: "ready"; prompts: LoggedPrompt[]; isRunning: boolean }
   | { kind: "error"; message: string };
 
 /** Shared framing for the non-list states, so the panel is never blank. */
@@ -145,10 +288,15 @@ function PanelMessage({
 function PromptRow({
   prompt,
   now,
+  query,
+  isRunning,
   onSendToComposer,
 }: {
   prompt: LoggedPrompt;
   now: number;
+  query: string;
+  /** True only for the one prompt the agent is currently working on. */
+  isRunning: boolean;
   onSendToComposer: (prompt: LoggedPrompt) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -184,14 +332,18 @@ function PromptRow({
   const hasText = prompt.text !== "";
 
   return (
-    <li className="border-b border-border px-3 py-2.5 last:border-b-0">
+    <li className="border-b border-border px-4 pt-2.5 pb-7 transition-colors last:border-b-0 hover:bg-state-hover">
       <div className="flex items-center justify-between gap-2">
-        <span
-          className="text-xs text-muted-foreground"
-          title={formatAbsoluteTime(prompt.createdAt)}
-        >
-          {formatRelativeTime(prompt.createdAt, now)}
-        </span>
+        <div className="flex min-w-0 items-center gap-2">
+          <time
+            dateTime={new Date(prompt.createdAt).toISOString()}
+            className="text-xs text-muted-foreground"
+            title={formatAbsoluteTime(prompt.createdAt)}
+          >
+            {formatRelativeTime(prompt.createdAt, now)}
+          </time>
+          {isRunning && <RunningIndicator />}
+        </div>
         <div className="flex shrink-0 items-center gap-1">
           {doesOverflow && (
             <Button
@@ -224,26 +376,31 @@ function PromptRow({
         </div>
       </div>
 
-      {hasText ? (
-        <p
-          ref={textRef}
-          style={isExpanded ? expandedStyle : clampStyle}
-          className="mt-1 text-sm text-foreground"
-        >
-          {prompt.text}
-        </p>
-      ) : (
-        <p className="mt-1 text-sm italic text-muted-foreground">
-          No text in this prompt
-        </p>
-      )}
+      {/* Only the content is indented. The timestamp and actions stay
+          flush with the row edge, so the text reads as a block beneath
+          its own header rather than as another column. */}
+      <div className="pl-3">
+        {hasText ? (
+          <p
+            ref={textRef}
+            style={isExpanded ? expandedStyle : clampStyle}
+            className="mt-1 text-sm text-foreground"
+          >
+            <HighlightedText text={prompt.text} query={query} />
+          </p>
+        ) : (
+          <p className="mt-1 text-sm italic text-muted-foreground">
+            No text in this prompt
+          </p>
+        )}
 
-      {prompt.extraPartCount > 0 && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          +{prompt.extraPartCount} non-text{" "}
-          {prompt.extraPartCount === 1 ? "part" : "parts"}
-        </p>
-      )}
+        {prompt.extraPartCount > 0 && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            +{prompt.extraPartCount} non-text{" "}
+            {prompt.extraPartCount === 1 ? "part" : "parts"}
+          </p>
+        )}
+      </div>
     </li>
   );
 }
@@ -277,10 +434,11 @@ function PromptsPanel() {
 
     void (async () => {
       try {
-        const { prompts } = await rpcRef.current.call("listPrompts", {
-          threadId,
-        });
-        if (!isCancelled) setState({ kind: "ready", prompts });
+        const { prompts, isRunning } = await rpcRef.current.call(
+          "listPrompts",
+          { threadId },
+        );
+        if (!isCancelled) setState({ kind: "ready", prompts, isRunning });
       } catch (error) {
         if (isCancelled) return;
         setState({
@@ -350,11 +508,26 @@ function PromptsPanel() {
   );
 
   const allPrompts = state.kind === "ready" ? state.prompts : [];
+  const isRunning = state.kind === "ready" && state.isRunning;
+  const query = filter.trim();
+
+  // The marker is keyed to the newest prompt's IDENTITY, computed from the
+  // unfiltered list. Marking "whatever row is on top" would be wrong: a filter
+  // can put a much older prompt first, and labelling that one as in-flight
+  // would be actively misleading.
+  const newestPromptId = useMemo(() => {
+    let newest: LoggedPrompt | null = null;
+    for (const prompt of allPrompts) {
+      if (newest === null || prompt.createdAt > newest.createdAt) newest = prompt;
+    }
+    return newest?.id ?? null;
+  }, [allPrompts]);
+  const isFiltering = query !== "";
 
   // Filter case-insensitively, then sort newest-first EXPLICITLY rather than
   // trusting the server's ordering.
   const rows = useMemo(() => {
-    const needle = filter.trim().toLowerCase();
+    const needle = query.toLowerCase();
     const matched =
       needle === ""
         ? allPrompts
@@ -362,9 +535,9 @@ function PromptsPanel() {
             prompt.text.toLowerCase().includes(needle),
           );
     return [...matched].sort((left, right) => right.createdAt - left.createdAt);
-  }, [allPrompts, filter]);
+  }, [allPrompts, query]);
 
-  const isFiltering = filter.trim() !== "";
+  const groups = useMemo(() => groupByDay(rows, now), [rows, now]);
 
   function renderBody() {
     if (threadId === null) {
@@ -398,7 +571,7 @@ function PromptsPanel() {
       return (
         <PanelMessage
           title="No prompts match"
-          detail={`Nothing in this thread contains “${filter.trim()}”.`}
+          detail={`Nothing in this thread contains “${query}”.`}
           action={
             <Button variant="outline" size="sm" onClick={() => setFilter("")}>
               Clear filter
@@ -407,30 +580,58 @@ function PromptsPanel() {
         />
       );
     }
+    // Groups are <section>s rather than list items so the only <li> elements in
+    // the panel remain the prompt rows themselves.
     return (
-      <ul className="flex flex-col">
-        {rows.map((prompt) => (
-          <PromptRow
-            key={prompt.id}
-            prompt={prompt}
-            now={now}
-            onSendToComposer={sendToComposer}
-          />
+      <div>
+        {groups.map((group) => (
+          <section key={group.key}>
+            {/* Sticky within its own section, so the heading stays visible
+                while you scroll that day and is then pushed out by the next. */}
+            <h3 className="sticky top-0 z-10 border-b border-border bg-background px-4 py-1.5 text-xs font-medium text-muted-foreground">
+              {group.label}
+            </h3>
+            <ul className="flex flex-col">
+              {group.prompts.map((prompt) => (
+                <PromptRow
+                  key={prompt.id}
+                  prompt={prompt}
+                  now={now}
+                  query={query}
+                  isRunning={isRunning && prompt.id === newestPromptId}
+                  onSendToComposer={sendToComposer}
+                />
+              ))}
+            </ul>
+          </section>
         ))}
-      </ul>
+      </div>
     );
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="shrink-0 border-b border-border p-3">
-        <Input
-          value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-          placeholder="Filter prompts…"
-          aria-label="Filter prompts"
-          className="h-8 text-sm"
-        />
+      <div className="shrink-0 border-b border-border px-4 py-3">
+        <div className="relative">
+          <Input
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="Filter prompts…"
+            aria-label="Filter prompts"
+            // pr-8 keeps typed text from running under the clear control.
+            className="h-8 pr-8 text-sm"
+          />
+          {isFiltering && (
+            <button
+              type="button"
+              aria-label="Clear filter"
+              onClick={() => setFilter("")}
+              className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-colors hover:bg-state-hover hover:text-foreground"
+            >
+              <ClearIcon />
+            </button>
+          )}
+        </div>
         {state.kind === "ready" && (
           <p className="mt-2 text-xs text-muted-foreground">
             {isFiltering

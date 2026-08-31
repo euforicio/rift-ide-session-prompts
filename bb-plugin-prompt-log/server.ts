@@ -41,9 +41,28 @@ export type LoggedPrompt = z.infer<typeof promptSchema>;
 export const rpcContract = defineRpcContract({
   listPrompts: {
     input: z.object({ threadId: z.string().min(1) }).strict(),
-    output: z.object({ prompts: z.array(promptSchema) }).strict(),
+    output: z
+      .object({
+        prompts: z.array(promptSchema),
+        /**
+         * Whether the thread is working right now, so the panel can mark the
+         * newest prompt as in-flight. A boolean rather than the raw status
+         * enum: the panel does not need to know BB's status vocabulary, and
+         * this way a new status value cannot break the frontend.
+         */
+        isRunning: z.boolean(),
+      })
+      .strict(),
   },
 });
+
+/**
+ * Thread statuses that mean "the agent is doing something now".
+ *
+ * `starting` is included because a session spinning up is already working from
+ * the user's point of view. `stopping`, `idle` and `error` are not.
+ */
+const RUNNING_STATUSES: ReadonlySet<string> = new Set(["active", "starting"]);
 
 /**
  * Reduce a history record to the row the panel renders.
@@ -82,8 +101,16 @@ export default function plugin(bb: BbPluginApi) {
     // bb.sdk is bind-gated, so it is read here in the handler rather than in
     // the factory body.
     listPrompts: async ({ threadId }) => {
-      const records = await bb.sdk.threads.promptHistory({ threadId });
-      return { prompts: records.map(flattenPrompt) };
+      // In parallel: the two reads are independent, so serialising them would
+      // just add latency to every panel refresh.
+      const [records, thread] = await Promise.all([
+        bb.sdk.threads.promptHistory({ threadId }),
+        bb.sdk.threads.get({ threadId }),
+      ]);
+      return {
+        prompts: records.map(flattenPrompt),
+        isRunning: RUNNING_STATUSES.has(thread.status),
+      };
     },
   });
 
@@ -104,8 +131,12 @@ export default function plugin(bb: BbPluginApi) {
   //   queued or steered into an ALREADY-running turn. Those add rows to the
   //   history without producing a new active transition, so without this the
   //   list would miss them until the next manual refresh.
+  // - thread.failed ends a turn without an idle transition. It matters now
+  //   that the response carries isRunning: without it the panel would keep
+  //   showing a "working" marker on a thread that had stopped.
   bb.events.on("thread.active", ({ thread }) => publishChanged(thread.id));
   bb.events.on("thread.idle", ({ thread }) => publishChanged(thread.id));
+  bb.events.on("thread.failed", ({ thread }) => publishChanged(thread.id));
 
   bb.onDispose(() => {
     bb.log.info("disposed");
