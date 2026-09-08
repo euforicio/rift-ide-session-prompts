@@ -6,7 +6,7 @@
 // Reading the prompts is `bb.sdk.threads.promptHistory`, which returns only
 // user-submitted prompts — no assistant output and no tool calls — so no
 // filtering of agent content is needed here.
-import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
+import { defineRpcContract, type RiftPluginApi } from "@riftlabs/plugin-sdk";
 import { z } from "zod";
 import { PROMPTS_CHANGED_CHANNEL } from "./shared.js";
 
@@ -16,7 +16,7 @@ import { PROMPTS_CHANGED_CHANNEL } from "./shared.js";
  * type error instead of a silent mismatch at runtime.
  */
 type PromptHistoryRecord = Awaited<
-  ReturnType<BbPluginApi["sdk"]["threads"]["promptHistory"]>
+  ReturnType<RiftPluginApi["sdk"]["threads"]["promptHistory"]>
 >[number];
 
 /**
@@ -94,7 +94,7 @@ function flattenPrompt(record: PromptHistoryRecord): LoggedPrompt {
   };
 }
 
-export default function plugin(bb: BbPluginApi) {
+export default function plugin(bb: RiftPluginApi) {
   bb.log.info("loaded");
 
   bb.rpc.register(rpcContract, {

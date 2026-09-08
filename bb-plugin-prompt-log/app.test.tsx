@@ -7,7 +7,7 @@ import {
   type CapturedPluginApp,
   type RenderSlotOptions,
   type RenderedSlot,
-} from "@get-bb/plugin-sdk/testing/app";
+} from "@riftlabs/plugin-sdk/testing/app";
 import { PROMPTS_CHANGED_CHANNEL } from "./shared.js";
 
 const THREAD = "thr_context";

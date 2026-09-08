@@ -1,13 +1,16 @@
 {
-  "name": "bb-plugin-prompt-log",
+  "name": "rift-plugin-prompt-log",
+  "homepage": "https://riftlabs.app",
+  "author": "Rift Labs",
+  "repository": { "type": "git", "url": "https://github.com/euforicio/rift-ide-session-prompts.git" },
   "version": "0.1.0",
   "type": "module",
   "engines": {
-    "bb": ">=0.40",
-    "bbPluginSdk": ">=0.4.21",
+    "rift": ">=0.40",
+    "riftPluginSdk": ">=0.4.48",
     "node": ">=22.18.0"
   },
-  "bb": {
+  "rift": {
     "name": "Prompt Log",
     "description": "Lists every prompt you sent in a thread, newest first, in a side panel.",
     "branding": {
@@ -22,7 +25,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@get-bb/plugin-sdk": "0.4.21",
+    "@riftlabs/plugin-sdk": "0.4.48",
     "@pierre/diffs": "^1.2.9",
     "@radix-ui/react-alert-dialog": "^1.1.19",
     "@radix-ui/react-context-menu": "^2.3.3",

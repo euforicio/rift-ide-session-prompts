@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createFakePluginHost,
   makeThreadResponse,
-} from "@get-bb/plugin-sdk/testing";
+} from "@riftlabs/plugin-sdk/testing";
 import plugin from "./server";
 import { PROMPTS_CHANGED_CHANNEL } from "./shared.js";
 
@@ -37,7 +37,7 @@ function hostWithHistory(
 
 describe("listPrompts", () => {
   it("flattens text parts and reports the thread's prompts", async () => {
-    const { bb, harness } = hostWithHistory([
+    const { rift: bb, harness } = hostWithHistory([
       record("phist_a", 1_000, [
         { type: "text", text: "first", mentions: [] },
         { type: "text", text: "second", mentions: [] },
@@ -63,7 +63,7 @@ describe("listPrompts", () => {
   });
 
   it("skips agent-only text, which is injected context rather than typed words", async () => {
-    const { bb, harness } = hostWithHistory([
+    const { rift: bb, harness } = hostWithHistory([
       record("phist_a", 1_000, [
         { type: "text", text: "what I typed", mentions: [] },
         {
@@ -86,7 +86,7 @@ describe("listPrompts", () => {
   });
 
   it("counts non-text parts instead of dropping them, so an image-only prompt still renders", async () => {
-    const { bb, harness } = hostWithHistory([
+    const { rift: bb, harness } = hostWithHistory([
       record("phist_a", 1_000, [
         { type: "localImage", path: "shot.png" },
         { type: "localFile", path: "log.txt" },
@@ -103,7 +103,7 @@ describe("listPrompts", () => {
   });
 
   it("passes the requested thread through to the SDK", async () => {
-    const { bb, harness } = hostWithHistory([]);
+    const { rift: bb, harness } = hostWithHistory([]);
     await plugin(bb);
 
     await harness.behavior.callRpc("listPrompts", { threadId: "thr_target" });
@@ -117,7 +117,7 @@ describe("listPrompts", () => {
 
 describe("live updates", () => {
   it("publishes an invalidation when a thread goes active (a prompt was submitted)", async () => {
-    const { bb, harness } = hostWithHistory([]);
+    const { rift: bb, harness } = hostWithHistory([]);
     await plugin(bb);
 
     await harness.behavior.emitThreadEvent("thread.active", {
@@ -130,7 +130,7 @@ describe("live updates", () => {
   });
 
   it("also publishes on idle, which catches prompts queued into a running turn", async () => {
-    const { bb, harness } = hostWithHistory([]);
+    const { rift: bb, harness } = hostWithHistory([]);
     await plugin(bb);
 
     await harness.behavior.emitThreadEvent("thread.idle", {
@@ -144,7 +144,7 @@ describe("live updates", () => {
   });
 
   it("carries the thread id so a panel can ignore other threads' signals", async () => {
-    const { bb, harness } = hostWithHistory([]);
+    const { rift: bb, harness } = hostWithHistory([]);
     await plugin(bb);
 
     await harness.behavior.emitThreadEvent("thread.active", {
@@ -159,7 +159,7 @@ describe("live updates", () => {
 
 describe("isRunning", () => {
   async function isRunningFor(status: ThreadStatus): Promise<boolean> {
-    const { bb, harness } = hostWithHistory([], status);
+    const { rift: bb, harness } = hostWithHistory([], status);
     await plugin(bb);
     const result = (await harness.behavior.callRpc("listPrompts", {
       threadId: "thr_1",
@@ -182,7 +182,7 @@ describe("isRunning", () => {
 
 describe("thread.failed", () => {
   it("publishes too, so a failed turn clears the working marker", async () => {
-    const { bb, harness } = hostWithHistory([]);
+    const { rift: bb, harness } = hostWithHistory([]);
     await plugin(bb);
 
     await harness.behavior.emitThreadEvent("thread.failed", {

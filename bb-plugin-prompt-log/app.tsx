@@ -17,12 +17,12 @@ import {
 } from "react";
 import {
   definePluginApp,
-  useBbContext,
+  useRiftContext,
   useComposer,
   useRealtime,
   useRealtimeConnectionState,
   useRpc,
-} from "@get-bb/plugin-sdk/app";
+} from "@riftlabs/plugin-sdk/app";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -407,7 +407,7 @@ function PromptRow({
 
 function PromptsPanel() {
   // The thread comes from the route context, not from the slot's props.
-  const { threadId } = useBbContext();
+  const { threadId } = useRiftContext();
   const composer = useComposer();
 
   // useRpc's identity is not documented as stable across renders, so it is
